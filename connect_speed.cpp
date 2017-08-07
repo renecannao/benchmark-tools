@@ -37,6 +37,7 @@ char *host=(char *)"localhost";
 int port=3306;
 char *schema=(char *)"information_schema";
 int silent;
+int keep_open=0;
 int local=0;
 int queries=0;
 int histograms=-1;
@@ -68,7 +69,8 @@ void * my_conn_thread(void *arg) {
 		}
 		if (rc) {
 			connect_OK++;
-			setsockopt(mysql->net.fd, SOL_SOCKET, SO_REUSEADDR, (char *)&arg_on, sizeof(arg_on));
+			if (queries)
+				setsockopt(mysql->net.fd, SOL_SOCKET, SO_REUSEADDR, (char *)&arg_on, sizeof(arg_on));
 			for (j=0; j<queries; j++) {
 				int r1=rand()%100;
 				sprintf(query,"SELECT %d", r1);
@@ -84,7 +86,8 @@ void * my_conn_thread(void *arg) {
 					select_OK++;
 				}
 			}
-			mysql_close(mysql);
+			if (keep_open==0)
+				mysql_close(mysql);
 		} else {
 			connect_ERR++;
 			if (silent==0) {
@@ -151,7 +154,7 @@ void * my_conn_thread(void *arg) {
 int main(int argc, char *argv[]) {
 	pthread_mutex_init(&mutex,NULL);
 	int opt;
-	while ((opt = getopt(argc, argv, "H:st:i:c:u:p:h:P:D:q:")) != -1) {
+	while ((opt = getopt(argc, argv, "H:kst:i:c:u:p:h:P:D:q:")) != -1) {
 		switch (opt) {
 		case 'H':
 			histograms = atoi(optarg);
@@ -187,11 +190,14 @@ int main(int argc, char *argv[]) {
 		case 'P':
 			port = atoi(optarg);
 			break;
+		case 'k':
+			keep_open = 1;
+			break;
 		case 's':
 			silent = 1;
 			break;
 		default: /* '?' */
-			fprintf(stderr, "Usage: %s -i interval_us -c count -u username -p password [ -h host ] [ -P port ] [ -D schema ] [ -q queries ] [ -H {0|1|2|3} ] [ -s ]\n", argv[0]);
+			fprintf(stderr, "Usage: %s -i interval_us -c count -u username -p password [ -h host ] [ -P port ] [ -D schema ] [ -q queries ] [ -H {0|1|2|3} ] [ -s ] [ -k ] [ -t threads ]\n", argv[0]);
 			exit(EXIT_FAILURE);
 		}
 	}
@@ -201,7 +207,7 @@ int main(int argc, char *argv[]) {
 		(username == NULL) ||
 		(password == NULL)
 	) {
-		fprintf(stderr, "Usage: %s -i interval_us -c count -u username -p password [ -h host ] [ -P port ] [ -D schema ] [ -q queries ] [ -H {0|1|2|3} ] [ -s ]\n", argv[0]);
+		fprintf(stderr, "Usage: %s -i interval_us -c count -u username -p password [ -h host ] [ -P port ] [ -D schema ] [ -q queries ] [ -H {0|1|2|3} ] [ -s ] [ -k ] [ -t threads ]\n", argv[0]);
 		exit(EXIT_FAILURE);
 	}
 
