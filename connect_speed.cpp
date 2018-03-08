@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <mysql/mysql.h>
+#include <mysql/my_config.h>
 #include <string.h>
 #include <time.h>
 #include <sys/socket.h>
@@ -9,6 +10,16 @@
 #include <pthread.h>
 #include <boost/histogram.hpp>
 #include <iostream>
+
+#if MYSQL_VERSION_MAJOR > 5
+#define MYSQL_WITH_SSL
+#endif 
+
+#ifndef MYSQL_WITH_SSL
+#if MYSQL_VERSION_MAJOR == 5 && MYSQL_VERSION_MINOR == 7 && MYSQL_VERSION_PATCH > 10
+#define MYSQL_WITH_SSL
+#endif 
+#endif
 
 // using histogram from https://github.com/HDembinski/histogram
 
@@ -45,6 +56,9 @@ unsigned int g_connect_OK=0;
 unsigned int g_connect_ERR=0;
 unsigned int g_select_OK=0;
 unsigned int g_select_ERR=0;
+#ifdef MYSQL_WITH_SSL
+char *ssl = NULL;
+#endif
 
 void * my_conn_thread(void *arg) {
 	auto h0 = bh::make_static_histogram(bh::axis::regular<>(20, 0, 2000, "us"));
@@ -62,6 +76,21 @@ void * my_conn_thread(void *arg) {
 	for (i=0; i<count; i++) {
 		MYSQL *mysql=mysql_init(NULL);
 		b=monotonic_time(); // begin
+#ifdef MYSQL_WITH_SSL
+		unsigned int ssl_arg = SSL_MODE_DISABLED;
+		if (ssl) {
+			if (strcmp(ssl,"disabled")==0) {
+				ssl_arg = SSL_MODE_DISABLED;
+			}
+			if (strcmp(ssl,"preferred")==0) {
+				ssl_arg = SSL_MODE_PREFERRED;
+			}
+			if (strcmp(ssl,"required")==0) {
+				ssl_arg = SSL_MODE_REQUIRED;
+			}
+		}
+		mysql_options(mysql, MYSQL_OPT_SSL_MODE, &ssl_arg);
+#endif
 		MYSQL *rc=mysql_real_connect(mysql, host, username, password, schema, (local ? 0 : port), NULL, 0);
 		if (queries==0) {
 			// we computed this only if queries==0
@@ -154,7 +183,11 @@ void * my_conn_thread(void *arg) {
 int main(int argc, char *argv[]) {
 	pthread_mutex_init(&mutex,NULL);
 	int opt;
+#ifdef MYSQL_WITH_SSL
+	while ((opt = getopt(argc, argv, "H:kst:i:c:u:p:h:P:D:q:S:")) != -1) {
+#else
 	while ((opt = getopt(argc, argv, "H:kst:i:c:u:p:h:P:D:q:")) != -1) {
+#endif
 		switch (opt) {
 		case 'H':
 			histograms = atoi(optarg);
@@ -181,6 +214,11 @@ int main(int argc, char *argv[]) {
 		case 'p':
 			password = strdup(optarg);
 			break;
+#ifdef MYSQL_WITH_SSL
+		case 'S':
+			ssl = strdup(optarg);
+			break;
+#endif
 		case 'h':
 			host = strdup(optarg);
 			break;
@@ -197,7 +235,11 @@ int main(int argc, char *argv[]) {
 			silent = 1;
 			break;
 		default: /* '?' */
+#ifdef MYSQL_WITH_SSL
+			fprintf(stderr, "Usage: %s -i interval_us -c count -u username -p password [ -h host ] [ -P port ] [ -D schema ] [ -q queries ] [ -H {0|1|2|3} ] [ -s ] [ -k ] [ -t threads ][ -S {disabled|preferred|required} ]\n", argv[0]);
+#else
 			fprintf(stderr, "Usage: %s -i interval_us -c count -u username -p password [ -h host ] [ -P port ] [ -D schema ] [ -q queries ] [ -H {0|1|2|3} ] [ -s ] [ -k ] [ -t threads ]\n", argv[0]);
+#endif
 			exit(EXIT_FAILURE);
 		}
 	}
@@ -207,9 +249,28 @@ int main(int argc, char *argv[]) {
 		(username == NULL) ||
 		(password == NULL)
 	) {
+#ifdef MYSQL_WITH_SSL
+		fprintf(stderr, "Usage: %s -i interval_us -c count -u username -p password [ -h host ] [ -P port ] [ -D schema ] [ -q queries ] [ -H {0|1|2|3} ] [ -s ] [ -k ] [ -t threads ][ -S {disabled|preferred|required} ]\n", argv[0]);
+#else
 		fprintf(stderr, "Usage: %s -i interval_us -c count -u username -p password [ -h host ] [ -P port ] [ -D schema ] [ -q queries ] [ -H {0|1|2|3} ] [ -s ] [ -k ] [ -t threads ]\n", argv[0]);
+#endif
 		exit(EXIT_FAILURE);
 	}
+
+#ifdef MYSQL_WITH_SSL
+	if (ssl) {
+		if (
+			strcmp(ssl,(char *)"disabled")
+			&&
+			strcmp(ssl,(char *)"preferred")
+			&&
+			strcmp(ssl,(char *)"required")
+		) {
+			fprintf(stderr,"Invalid SSL setting\n");
+			exit(EXIT_FAILURE);
+		}
+	}
+#endif
 
 	int i;
 	int rc;
