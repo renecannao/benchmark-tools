@@ -3,3 +3,4 @@ connect_speed8
 perf.data*
 bench_spike
 unique_queries
+scale_poll

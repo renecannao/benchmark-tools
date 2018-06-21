@@ -6,6 +6,9 @@ bench_spike: bench_spike.cpp
 unique_queries: unique_queries.cpp
 	g++ unique_queries.cpp -o unique_queries -Iinclude -std=c++11 -lmysqlclient -pthread -O2 -ggdb
 
+scale_poll: scale_poll.cpp
+	g++ scale_poll.cpp -o scale_poll -Iinclude -std=c++11 -lmysqlclient -pthread -O0 -ggdb
+
 connect_speed: connect_speed.cpp
 	g++ connect_speed.cpp -o connect_speed -Iinclude -std=c++11 -lmysqlclient -pthread -O2 -ggdb
 
