@@ -1,8 +1,10 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdio.h>
-#include <mysql/mysql.h>
-#include <mysql/my_config.h>
+//#include <mysql/mysql.h>
+#include <mysql.h>
+//#include <mysql/my_config.h>
+//#include <my_config.h>
 #include <string.h>
 #include <time.h>
 #include <sys/socket.h>
@@ -41,6 +43,7 @@ pthread_mutex_t mutex;
 
 int interval_us=-1;
 int num_threads=1;
+int num_users=0;
 int count=0;
 char *username=NULL;
 char *password=NULL;
@@ -58,8 +61,8 @@ unsigned int g_select_OK=0;
 unsigned int g_select_ERR=0;
 #ifdef MYSQL_WITH_SSL
 char *ssl = NULL;
-char *auth = NULL;
 #endif
+char *auth = NULL;
 
 void * my_conn_thread(void *arg) {
 	auto h0 = bh::make_static_histogram(bh::axis::regular<>(20, 0, 2000, "us"));
@@ -70,10 +73,16 @@ void * my_conn_thread(void *arg) {
 	unsigned int connect_ERR=0;
 	unsigned int select_OK=0;
 	unsigned int select_ERR=0;
+	char * _username = NULL;
+	char * _password = NULL;
 	char arg_on=1;
 	int i, j;
 	char query[128];
 	unsigned long long b, e, ce;
+	MYSQL **mysqlconns = NULL;
+	if (keep_open) {
+		mysqlconns=(MYSQL **)malloc(sizeof(MYSQL *)*count);
+	}
 	for (i=0; i<count; i++) {
 		MYSQL *mysql=mysql_init(NULL);
 		b=monotonic_time(); // begin
@@ -91,6 +100,7 @@ void * my_conn_thread(void *arg) {
 			}
 		}
 		mysql_options(mysql, MYSQL_OPT_SSL_MODE, &ssl_arg);
+#endif
 		if (auth) {
 			int rc = 0;
 			rc = mysql_options(mysql, MYSQL_DEFAULT_AUTH, auth);
@@ -100,21 +110,105 @@ void * my_conn_thread(void *arg) {
 				exit(EXIT_FAILURE);
 			}
 		}
-#endif
-		MYSQL *rc=mysql_real_connect(mysql, host, username, password, schema, (local ? 0 : port), NULL, 0);
-		mysql_set_character_set(mysql, "utf8");
+		if (num_users) {
+			free(_username);
+			free(_password);
+			_username = (char *)malloc(strlen(username)+128);
+			_password = (char *)malloc(strlen(password)+128);
+			int id = rand() % num_users;
+			id++;
+			sprintf(_username,"%s%d",username,id);	
+			sprintf(_password,"%s%d",password,id);	
+		} else {
+			_username = username;
+			_password = password;
+		}
+		mysql_options(mysql, MYSQL_DEFAULT_AUTH, "mysql_native_password");
+		MYSQL *rc=mysql_real_connect(mysql, host, _username, _password, schema, (local ? 0 : port), NULL, 0);
+		if (keep_open) {
+			mysqlconns[i] = mysql;
+		}
+		if (rc) {
+			if (num_users==0) {
+				mysql_set_character_set(mysql, "utf8");
+			}
+		}
 		if (queries==0) {
 			// we computed this only if queries==0
 			ce=monotonic_time(); // connection established
 		}
 		if (rc) {
 			connect_OK++;
-			if (queries)
 				setsockopt(mysql->net.fd, SOL_SOCKET, SO_REUSEADDR, (char *)&arg_on, sizeof(arg_on));
-			for (j=0; j<queries; j++) {
-				int r1=rand()%100;
-				sprintf(query,"SELECT %d", r1);
+			if (queries) {
+				int n_qu = queries;
+				if (keep_open) {
+					if (i < count/2) {
+						n_qu = 0;
+					} else {
+						n_qu *=2 ;
+					}
+				}
+			MYSQL *my = NULL;
+			for (j=0; j<n_qu; j++) {
+				if (keep_open) {
+					if (j%100==0) {
+					int randc = rand()%(i+1);
+					//mysql = mysqlconns[randc];
+						my = mysqlconns[randc];
+					}
+					mysql = my;
+/*
+					if (rand()%100 == 0) { // every 20 queries, disconnect and reconnect
+						MYSQL * mysql_new = mysql_init(NULL);
 
+#ifdef MYSQL_WITH_SSL
+		mysql_options(mysql_new, MYSQL_OPT_SSL_MODE, &ssl_arg);
+#endif
+		if (auth) {
+			int rc = 0;
+			rc = mysql_options(mysql_new, MYSQL_DEFAULT_AUTH, auth);
+			//rc = mysql_options(mysql, MYSQL_DEFAULT_AUTH, "mysql_native_password");
+			if (rc) {
+				fprintf(stderr, "Unable to set auth plugin %s\n", mysql_error(mysql_new));
+				exit(EXIT_FAILURE);
+			}
+		}
+						rc = mysql_real_connect(mysql_new, host, _username, _password, schema, (local ? 0 : port), NULL, 0);
+						if (rc) {
+							connect_OK++;
+							if (num_users==0) {
+								mysql_set_character_set(mysql, "utf8");
+							}
+							mysql_close(mysql);
+							mysql = mysql_new;
+							mysqlconns[randc] = mysql;
+						}
+					}
+*/
+				}
+				int r1=rand()%100;
+				//sprintf(query,"SELECT /* max_lag_ms=%d */ %d", 1+r1, r1);
+				//sprintf(query,"SELECT %d", r1);
+				sprintf(query,"INSERT INTO test1 VALUES (NULL, 0)");
+				if (mysql_query(mysql,query)) {
+					if (silent==0) {
+						fprintf(stderr,"%s\n", mysql_error(mysql));
+					}
+					select_ERR++;
+				} else {
+					select_OK++;
+				}
+				sprintf(query,"DELETE FROM test1 WHERE id>= %d ORDER BY id LIMIT 1", r1);
+				if (mysql_query(mysql,query)) {
+					if (silent==0) {
+						fprintf(stderr,"%s\n", mysql_error(mysql));
+					}
+					select_ERR++;
+				} else {
+					select_OK++;
+				}
+				sprintf(query,"SELECT * FROM test1 LIMIT %d", r1);
 				if (mysql_query(mysql,query)) {
 					if (silent==0) {
 						fprintf(stderr,"%s\n", mysql_error(mysql));
@@ -125,6 +219,10 @@ void * my_conn_thread(void *arg) {
 					mysql_free_result(result);
 					select_OK++;
 				}
+				if (interval_us) {
+					usleep(interval_us/100 * (1+rand()%3));
+				}
+			}
 			}
 			if (keep_open==0)
 				mysql_close(mysql);
@@ -161,6 +259,12 @@ void * my_conn_thread(void *arg) {
 			usleep(interval_us-(e-b));
 		}
 	}
+	if (keep_open) {
+		for (i=0; i<count; i++) {
+			MYSQL *my = mysqlconns[i];
+			mysql_close(my);
+		}
+	}
 	pthread_mutex_lock(&mutex);
 	for (const auto& bin : h0.axis(0_c)) {
 		if (h0.value(bin.idx)) {
@@ -195,9 +299,9 @@ int main(int argc, char *argv[]) {
 	pthread_mutex_init(&mutex,NULL);
 	int opt;
 #ifdef MYSQL_WITH_SSL
-	while ((opt = getopt(argc, argv, "H:kst:i:c:u:p:h:P:D:q:S:a:")) != -1) {
+	while ((opt = getopt(argc, argv, "H:kst:i:c:u:p:h:P:D:q:U:S:a:")) != -1) {
 #else
-	while ((opt = getopt(argc, argv, "H:kst:i:c:u:p:h:P:D:q:")) != -1) {
+	while ((opt = getopt(argc, argv, "H:kst:i:c:u:p:h:P:D:q:U:a:")) != -1) {
 #endif
 		switch (opt) {
 		case 'H':
@@ -209,6 +313,9 @@ int main(int argc, char *argv[]) {
 			break;
 		case 't':
 			num_threads = atoi(optarg);
+			break;
+		case 'U':
+			num_users = atoi(optarg);
 			break;
 		case 'i':
 			interval_us = atoi(optarg);
@@ -229,10 +336,10 @@ int main(int argc, char *argv[]) {
 		case 'S':
 			ssl = strdup(optarg);
 			break;
+#endif
 		case 'a':
 			auth = strdup(optarg);
 			break;
-#endif
 		case 'h':
 			host = strdup(optarg);
 			break;
@@ -250,9 +357,9 @@ int main(int argc, char *argv[]) {
 			break;
 		default: /* '?' */
 #ifdef MYSQL_WITH_SSL
-			fprintf(stderr, "Usage: %s -i interval_us -c count -u username -p password [ -h host ] [ -P port ] [ -D schema ] [ -q queries ] [ -H {0|1|2|3} ] [ -s ] [ -k ] [ -t threads ][ -S {disabled|preferred|required} ][ -a auth_plugin ]\n", argv[0]);
+			fprintf(stderr, "Usage: %s -i interval_us -c count -u username -p password [ -U num_users ] [ -h host ] [ -P port ] [ -D schema ] [ -q queries ] [ -H {0|1|2|3} ] [ -s ] [ -k ] [ -t threads ][ -S {disabled|preferred|required} ][ -a auth_plugin ]\n", argv[0]);
 #else
-			fprintf(stderr, "Usage: %s -i interval_us -c count -u username -p password [ -h host ] [ -P port ] [ -D schema ] [ -q queries ] [ -H {0|1|2|3} ] [ -s ] [ -k ] [ -t threads ]\n", argv[0]);
+			fprintf(stderr, "Usage: %s -i interval_us -c count -u username -p password [ -U num_users ] [ -h host ] [ -P port ] [ -D schema ] [ -q queries ] [ -H {0|1|2|3} ] [ -s ] [ -k ] [ -t threads ]\n", argv[0]);
 #endif
 			exit(EXIT_FAILURE);
 		}
@@ -264,9 +371,9 @@ int main(int argc, char *argv[]) {
 		(password == NULL)
 	) {
 #ifdef MYSQL_WITH_SSL
-		fprintf(stderr, "Usage: %s -i interval_us -c count -u username -p password [ -h host ] [ -P port ] [ -D schema ] [ -q queries ] [ -H {0|1|2|3} ] [ -s ] [ -k ] [ -t threads ][ -S {disabled|preferred|required} ][ -a auth_plugin ]\n", argv[0]);
+		fprintf(stderr, "Usage: %s -i interval_us -c count -u username -p password [ -U num_users ] [ -h host ] [ -P port ] [ -D schema ] [ -q queries ] [ -H {0|1|2|3} ] [ -s ] [ -k ] [ -t threads ][ -S {disabled|preferred|required} ][ -a auth_plugin ]\n", argv[0]);
 #else
-		fprintf(stderr, "Usage: %s -i interval_us -c count -u username -p password [ -h host ] [ -P port ] [ -D schema ] [ -q queries ] [ -H {0|1|2|3} ] [ -s ] [ -k ] [ -t threads ]\n", argv[0]);
+		fprintf(stderr, "Usage: %s -i interval_us -c count -u username -p password [ -U num_users ] [ -h host ] [ -P port ] [ -D schema ] [ -q queries ] [ -H {0|1|2|3} ] [ -s ] [ -k ] [ -t threads ]\n", argv[0]);
 #endif
 		exit(EXIT_FAILURE);
 	}
