@@ -1,3 +1,4 @@
+set_testing
 connect_speed
 connect_speed8
 perf.data*
