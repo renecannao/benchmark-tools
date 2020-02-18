@@ -6,3 +6,4 @@ bench_spike
 unique_queries
 scale_poll
 aurora_bench
+sqlite_server_test
