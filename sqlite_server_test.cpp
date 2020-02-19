@@ -27,6 +27,8 @@
 #endif 
 #endif
 
+#define NUM_INT_COLS 3
+
 using namespace std;
 
 unsigned long long monotonic_time() {
@@ -68,11 +70,15 @@ char *ssl = NULL;
 char *auth = NULL;
 
 bool run_dml(string& query, MYSQL *mysql) {
+__retry:
 	if (mysql_query(mysql,query.c_str())) {
 		if (silent==0) {
 			fprintf(stderr,"%s\n", mysql_error(mysql));
 		}
 		g_dml_ERR++;
+		if (strcmp(mysql_error(mysql),(char *)"database is locked")==0) {
+			goto __retry;
+		}
 		return false;
 	} else {
 		g_dml_OK++;
@@ -201,25 +207,39 @@ void * my_conn_thread(void *arg) {
 		int id, id2;
 		mysql = mysqlconns[cidx];
 		int qt = randc%100;
-		string db = "main_" + to_string(101+randc%100);
+		int hg = 100;
+		if (num_users < 20) {
+			if ((randc+j) > 0) {
+				hg += (randc+j)%num_users;
+			} else {
+				hg += (randc)%num_users;
+			}
+		} else {
+			if ((randc+j) > 0) {
+				hg += (randc+j)%20;
+			} else {
+				hg += (randc)%20;
+			}
+		}
+		string db = "main_" + to_string(101+randc%num_users);
 		mysql_select_db(mysql,db.c_str());
 		// for now transactions aren't completely working
 //		if (randc%30==0) {
 //			query = "START TRANSACTION";
 //			rb = run_dml(query, mysql); assert(rb);
 //		}
-		if (qt < 10) {
+		if (qt < 5) {
 			int tn = rand()%NUM_TABLES;
-			query = "SELECT id FROM test" + to_string(tn) + " ORDER BY RANDOM() LIMIT 1";
+			query = "SELECT /* hostgroup=" + to_string(hg) + " */ id FROM test" + to_string(tn) + " ORDER BY RANDOM() LIMIT 1";
 			rb = run_select(query, mysql, &id); assert(rb);
 			if (id) {
-				query = "DELETE FROM test" + to_string(tn) + " WHERE id BETWEEN  " + to_string(id) + " AND " + to_string(id+20);
+				query = "DELETE /* hostgroup=" + to_string(hg) + " */ FROM test" + to_string(tn) + " WHERE id BETWEEN " + to_string(id) + " AND " + to_string(id+5);
 				rb = run_dml(query, mysql); assert(rb);
 			}
-		} else if (qt < 30) {
+		} else if (qt < 15) {
 			id = rand()%1000;
-			int ne = id%5;
-			query = "INSERT INTO test" + to_string(rand()%NUM_TABLES) + " (id";
+			int ne = id%NUM_INT_COLS;
+			query = "INSERT /* hostgroup=" + to_string(hg) + " */ INTO test" + to_string(rand()%NUM_TABLES) + " (id";
 			for (int i=0; i<ne; i++) {
 				query += ",id" + to_string(i+1);
 			}
@@ -229,12 +249,31 @@ void * my_conn_thread(void *arg) {
 			}
 			query += ")";
 			rb = run_dml(query, mysql); assert(rb);
+		} else if (qt < 30) {
+			int tn = rand()%NUM_TABLES;
+			query = "SELECT /* hostgroup=" + to_string(hg) + " */ id FROM test" + to_string(tn) + " ORDER BY RANDOM() LIMIT 1";
+			rb = run_select(query, mysql, &id); assert(rb);
+			if (id) {
+				id2 = rand()%1000;
+				query = "UPDATE /* hostgroup=" + to_string(hg) + " */ test" + to_string(tn) + " SET id=id";
+				int ne = id%NUM_INT_COLS;
+				vector<int> ids;
+				for (int i=0; i<ne; i++) {
+					ids.push_back(i+1);
+				}
+				std::random_shuffle ( ids.begin(), ids.end() ); // randomize them
+				for (int i=0; i<ne; i++) {
+					query += ", id" + to_string(ids[i]) + "=" + to_string(id%(7+i));
+				}
+				query += " WHERE id BETWEEN " + to_string(id) + " AND " + to_string(id+3);
+				rb = run_dml(query, mysql); assert(rb);
+			}
 		} else {
 			int tn = rand()%NUM_TABLES;
-			int ne = rand()%20;
-			query = "SELECT id";
+			int ne = rand()%6;
+			query = "SELECT /* hostgroup=" + to_string(hg) + " */ id";
 			for (int i=0; i<ne; i++) {
-				query += ",id" + to_string(rand()%5+1);
+				query += ",id" + to_string(rand()%NUM_INT_COLS+1);
 			}
 			query += " FROM test" + to_string(tn) + " ORDER BY id DESC LIMIT 1";
 			rb = run_select(query, mysql, &id); assert(rb);
@@ -243,15 +282,15 @@ void * my_conn_thread(void *arg) {
 			} else {
 				id2 = 0;
 			}
-			query = "SELECT id";
-			ne = rand()%20;
+			query = "SELECT /* hostgroup=" + to_string(hg) + " */ id";
+			ne = rand()%6;
 			for (int i=0; i<ne; i++) {
-				query += ",id" + to_string(rand()%5+1);
+				query += ",id" + to_string(rand()%NUM_INT_COLS+1);
 			}
 			query += " FROM test" + to_string(tn) + " WHERE id > " + to_string(id2);
-			ne = rand()%20;
+			ne = rand()%6;
 			for (int i=0; i<ne; i++) {
-				query += " AND id" + to_string(rand()%5+1);
+				query += " AND id" + to_string(rand()%NUM_INT_COLS+1);
 				query += " > 0";
 			}
 			query += " ORDER BY id LIMIT " + to_string(id%100+1);
@@ -379,7 +418,11 @@ int main(int argc, char *argv[]) {
 		query = "DROP TABLE IF EXISTS test" + to_string(i);
 		rb = run_dml(query, mysql); assert(rb);
 		usleep(50000);
-		query = "CREATE TABLE test" + to_string(i) + " (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, id1 INT, id2 INT, id3 INT, id4 INT, id5 INT)";
+		query = "CREATE TABLE test" + to_string(i) + " (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL";
+		for (int i=0;i<NUM_INT_COLS; i++) {
+			query += ", id" + to_string(i+1) + " INT";
+		}
+		query += ")";
 		rb = run_dml(query, mysql); assert(rb);
 		usleep(50000);
 	}

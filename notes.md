@@ -13,16 +13,18 @@ Start proxysql, with `--sqlite3-server`, for example:
 ./proxysql -f -D . --sqlite3-server
 ```
 
-Create users:
+Create users and hostgroup:
 ```bash
 for i in `seq 0 19` ; do
-echo "INSERT INTO mysql_users(username,password,default_hostgroup) VALUES (\"user$i\",\"user$i\",100);
+echo "INSERT INTO mysql_users(username,password,default_hostgroup) VALUES (\"user$i\",\"user$i\",100);"
+done | mysql -u admin -padmin -h 127.0.0.1 -P6032
+for i in `seq 100 119` ; do
+echo "INSERT INTO mysql_servers (hostgroup_id, hostname, port) VALUES ($i,'127.0.0.1',6030);"
 done | mysql -u admin -padmin -h 127.0.0.1 -P6032
 ```
 
-Create backend and save configuration:
+Load and save configuration:
 ```sql
-INSERT INTO mysql_servers (hostgroup_id, hostname, port) VALUES (100,'127.0.0.1',6030);
 SAVE MYSQL SERVERS TO DISK;
 LOAD MYSQL SERVERS TO RUNTIME;
 SAVE MYSQL USERS TO DISK;
@@ -33,8 +35,7 @@ LOAD MYSQL USERS TO RUNTIME;
 This tool creates a lot of connections to proxysql, using different credentials,
 and using different schemas.
 It automatically creates the tables it will ran queries to.
-Tables are constantly selected, inserted and deleted.
-Updates are not implemented yet.
+Tables are constantly selected, updated, inserted and deleted.
 Transactions are temporary disabled.
 In the example below:
 
@@ -48,5 +49,5 @@ In the example below:
 * user `user` is used as base of usernames (`-u user`)
 * password `user` is used as base of passwords (`-p user`)
 * 20 users are used (`-U 20`). The users will be from `user0` to `user19`
-* it will use by default schema `main` (`-D main`). Although, internally it will randomly switch from schema `main_101` to `main_200` (hardcoded)
+* it will use by default schema `main` (`-D main`). Although, internally it will randomly switch from schema `main_101` to `main_xxx` , where `xxx` is `101+num_users` (120 in this example)
 * each thread will run 3000 queries (`-q 3000`)
