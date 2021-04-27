@@ -1,3 +1,4 @@
+//#define USE_HISTOGRAM
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -8,7 +9,9 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <pthread.h>
+#ifdef USE_HISTOGRAM
 #include <boost/histogram.hpp>
+#endif
 #include <iostream>
 
 #if MYSQL_VERSION_MAJOR > 5
@@ -21,10 +24,12 @@
 #endif 
 #endif
 
+#ifdef USE_HISTOGRAM
 // using histogram from https://github.com/HDembinski/histogram
 
 namespace bh = boost::histogram;
 using namespace bh::literals;
+#endif
 
 unsigned long long monotonic_time() {
 	struct timespec ts;
@@ -33,10 +38,12 @@ unsigned long long monotonic_time() {
 	return (((unsigned long long) ts.tv_sec) * 1000000) + (ts.tv_nsec / 1000);
 }
 
+#ifdef USE_HISTOGRAM
 auto gh0 = bh::make_static_histogram(bh::axis::regular<>(20, 0, 2000, "us"));
 auto gh1 = bh::make_static_histogram(bh::axis::regular<>(20, 0, 40000, "us"));
 auto gh2 = bh::make_static_histogram(bh::axis::regular<>(25, 0, 1000, "ms"));
 auto gh3 = bh::make_static_histogram(bh::axis::regular<>(10, 0, 10, "s"));
+#endif
 pthread_mutex_t mutex;
 
 int interval_us=-1;
@@ -51,7 +58,9 @@ int silent;
 int keep_open=0;
 int local=0;
 int queries=0;
+#ifdef USE_HISTOGRAM
 int histograms=-1;
+#endif
 unsigned int g_connect_OK=0;
 unsigned int g_connect_ERR=0;
 unsigned int g_select_OK=0;
@@ -62,10 +71,12 @@ char *auth = NULL;
 #endif
 
 void * my_conn_thread(void *arg) {
+#ifdef USE_HISTOGRAM
 	auto h0 = bh::make_static_histogram(bh::axis::regular<>(20, 0, 2000, "us"));
 	auto h1 = bh::make_static_histogram(bh::axis::regular<>(20, 0, 40000, "us"));
 	auto h2 = bh::make_static_histogram(bh::axis::regular<>(25, 0, 1000, "ms"));
 	auto h3 = bh::make_static_histogram(bh::axis::regular<>(10, 0, 10, "s"));
+#endif
 	unsigned int connect_OK=0;
 	unsigned int connect_ERR=0;
 	unsigned int select_OK=0;
@@ -102,7 +113,7 @@ void * my_conn_thread(void *arg) {
 		}
 #endif
 		MYSQL *rc=mysql_real_connect(mysql, host, username, password, schema, (local ? 0 : port), NULL, 0);
-		mysql_set_character_set(mysql, "utf8");
+		//mysql_set_character_set(mysql, "utf8");
 		if (queries==0) {
 			// we computed this only if queries==0
 			ce=monotonic_time(); // connection established
@@ -141,6 +152,7 @@ void * my_conn_thread(void *arg) {
 		} else {
 			l=(e-b);
 		}
+#ifdef USE_HISTOGRAM
 		if (histograms >= 0 && histograms <= 3) {
 			if (l < 40000 && histograms < 2) {
 				if (l<2000 && histograms == 0) {
@@ -156,11 +168,13 @@ void * my_conn_thread(void *arg) {
 				}
 			}
 		}
+#endif
 		l=e-b;
 		if (l < interval_us) {
 			usleep(interval_us-(e-b));
 		}
 	}
+#ifdef USE_HISTOGRAM
 	pthread_mutex_lock(&mutex);
 	for (const auto& bin : h0.axis(0_c)) {
 		if (h0.value(bin.idx)) {
@@ -183,6 +197,7 @@ void * my_conn_thread(void *arg) {
 		}
     }
 	pthread_mutex_unlock(&mutex);
+#endif
 
 	__sync_fetch_and_add(&g_connect_OK,connect_OK);
 	__sync_fetch_and_add(&g_connect_ERR,connect_ERR);
@@ -200,6 +215,7 @@ int main(int argc, char *argv[]) {
 	while ((opt = getopt(argc, argv, "H:kst:i:c:u:p:h:P:D:q:")) != -1) {
 #endif
 		switch (opt) {
+#ifdef USE_HISTOGRAM
 		case 'H':
 			histograms = atoi(optarg);
 			if (histograms > 3) {
@@ -207,6 +223,7 @@ int main(int argc, char *argv[]) {
 				exit(EXIT_FAILURE);
 			}
 			break;
+#endif
 		case 't':
 			num_threads = atoi(optarg);
 			break;
@@ -310,6 +327,7 @@ int main(int argc, char *argv[]) {
 	} else {
 		fprintf(stderr,"Connections[OK/ERR]: (%u,%u) . Clock time: %llums\n", g_connect_OK, g_connect_ERR, (end_time-start_time)/1000);
 	}
+#ifdef USE_HISTOGRAM
 	for (const auto& bin : gh0.axis(0_c)) {
 		if (gh0.value(bin.idx)) {
 			//fprintf(stdout,"[%.1fms, %.1fms): %u\n", (bin.left/1000), (bin.right/1000), (unsigned int)(gh0.value(bin.idx)));
@@ -331,6 +349,6 @@ int main(int argc, char *argv[]) {
         	std::cout << "[" << bin.left << "ms, " << bin.right << "ms): " << gh3.value(bin.idx) << std::endl;
 		}
 	}
-
+#endif
 	exit(EXIT_SUCCESS);
 }
