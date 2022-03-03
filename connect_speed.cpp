@@ -53,6 +53,7 @@ char *username=NULL;
 char *password=NULL;
 char *host=(char *)"localhost";
 int port=3306;
+int multiport=1;
 char *schema=(char *)"information_schema";
 int silent;
 int keep_open=0;
@@ -112,7 +113,7 @@ void * my_conn_thread(void *arg) {
 			}
 		}
 #endif
-		MYSQL *rc=mysql_real_connect(mysql, host, username, password, schema, (local ? 0 : port), NULL, 0);
+		MYSQL *rc=mysql_real_connect(mysql, host, username, password, schema, (local ? 0 : ( port + rand()%multiport ) ), NULL, 0);
 		//mysql_set_character_set(mysql, "utf8");
 		if (queries==0) {
 			// we computed this only if queries==0
@@ -210,9 +211,9 @@ int main(int argc, char *argv[]) {
 	pthread_mutex_init(&mutex,NULL);
 	int opt;
 #ifdef MYSQL_WITH_SSL
-	while ((opt = getopt(argc, argv, "H:kst:i:c:u:p:h:P:D:q:S:a:")) != -1) {
+	while ((opt = getopt(argc, argv, "H:kst:i:c:u:p:h:P:M:D:q:S:a:")) != -1) {
 #else
-	while ((opt = getopt(argc, argv, "H:kst:i:c:u:p:h:P:D:q:")) != -1) {
+	while ((opt = getopt(argc, argv, "H:kst:i:c:u:p:h:P:M:D:q:")) != -1) {
 #endif
 		switch (opt) {
 #ifdef USE_HISTOGRAM
@@ -259,6 +260,9 @@ int main(int argc, char *argv[]) {
 		case 'P':
 			port = atoi(optarg);
 			break;
+		case 'M':
+			multiport = atoi(optarg);
+			break;
 		case 'k':
 			keep_open = 1;
 			break;
@@ -267,9 +271,9 @@ int main(int argc, char *argv[]) {
 			break;
 		default: /* '?' */
 #ifdef MYSQL_WITH_SSL
-			fprintf(stderr, "Usage: %s -i interval_us -c count -u username -p password [ -h host ] [ -P port ] [ -D schema ] [ -q queries ] [ -H {0|1|2|3} ] [ -s ] [ -k ] [ -t threads ][ -S {disabled|preferred|required} ][ -a auth_plugin ]\n", argv[0]);
+			fprintf(stderr, "Usage: %s -i interval_us -c count -u username -p password [ -h host ] [ -P port ] [ -M multiport ] [ -D schema ] [ -q queries ] [ -H {0|1|2|3} ] [ -s ] [ -k ] [ -t threads ][ -S {disabled|preferred|required} ][ -a auth_plugin ]\n", argv[0]);
 #else
-			fprintf(stderr, "Usage: %s -i interval_us -c count -u username -p password [ -h host ] [ -P port ] [ -D schema ] [ -q queries ] [ -H {0|1|2|3} ] [ -s ] [ -k ] [ -t threads ]\n", argv[0]);
+			fprintf(stderr, "Usage: %s -i interval_us -c count -u username -p password [ -h host ] [ -P port ] [ -M multiport ] [ -D schema ] [ -q queries ] [ -H {0|1|2|3} ] [ -s ] [ -k ] [ -t threads ]\n", argv[0]);
 #endif
 			exit(EXIT_FAILURE);
 		}
@@ -281,9 +285,9 @@ int main(int argc, char *argv[]) {
 		(password == NULL)
 	) {
 #ifdef MYSQL_WITH_SSL
-		fprintf(stderr, "Usage: %s -i interval_us -c count -u username -p password [ -h host ] [ -P port ] [ -D schema ] [ -q queries ] [ -H {0|1|2|3} ] [ -s ] [ -k ] [ -t threads ][ -S {disabled|preferred|required} ][ -a auth_plugin ]\n", argv[0]);
+		fprintf(stderr, "Usage: %s -i interval_us -c count -u username -p password [ -h host ] [ -P port ] [ -M multiport ] [ -D schema ] [ -q queries ] [ -H {0|1|2|3} ] [ -s ] [ -k ] [ -t threads ][ -S {disabled|preferred|required} ][ -a auth_plugin ]\n", argv[0]);
 #else
-		fprintf(stderr, "Usage: %s -i interval_us -c count -u username -p password [ -h host ] [ -P port ] [ -D schema ] [ -q queries ] [ -H {0|1|2|3} ] [ -s ] [ -k ] [ -t threads ]\n", argv[0]);
+		fprintf(stderr, "Usage: %s -i interval_us -c count -u username -p password [ -h host ] [ -P port ] [ -M multiport ] [ -D schema ] [ -q queries ] [ -H {0|1|2|3} ] [ -s ] [ -k ] [ -t threads ]\n", argv[0]);
 #endif
 		exit(EXIT_FAILURE);
 	}
